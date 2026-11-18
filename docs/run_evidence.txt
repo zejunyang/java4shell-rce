@@ -123,6 +123,9 @@ attempt dst=48B ret=47 victim.length=1771742825 (was 64)
 exec rc=0
 TEST C exit code: 0
 
+(output abridged: the closing banner re-printed the proof file left
+behind by Test A; the custom payload's own output follows)
+
 $ type jar_custom_proof.txt
 gpd\aquaflux
 ```
