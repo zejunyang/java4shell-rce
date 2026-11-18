@@ -1,0 +1,9 @@
+# third-party study material fetched during development (linked from README instead)
+refs/
+
+# local helper scripts for the lab machine
+win3_*.ps1
+
+# OS noise
+Thumbs.db
+.DS_Store
